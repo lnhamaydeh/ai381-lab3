@@ -24,7 +24,6 @@ import numpy as np
 import pandas as pd
 from mlflow.models import infer_signature
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -52,16 +51,7 @@ def preprocessing() -> ColumnTransformer:
 # Only about 25% of customers churn, so every candidate uses class_weight="balanced": without it the models
 # rarely predict "churn" at the 0.5 threshold and F1 drops (logreg: 0.495 without, 0.589 with).
 CANDIDATES = {
-    # a linear baseline: fast, tiny and easy to explain
-    "logreg_balanced": LogisticRegression(C=1.0, class_weight="balanced", max_iter=1000),
-    # many shallow trees: can learn interactions (e.g. short tenure AND many support calls)
-    "random_forest_balanced": RandomForestClassifier(
-        n_estimators=200, max_depth=6, min_samples_leaf=5, class_weight="balanced", random_state=42
-    ),
-    # boosted trees: each tree corrects the previous ones; small learning rate and shallow trees to avoid overfitting
-    "hist_gb_balanced": HistGradientBoostingClassifier(
-        max_iter=200, learning_rate=0.05, max_depth=3, class_weight="balanced", random_state=42
-    ),
+    "weak": LogisticRegression(C=0.00001, max_iter=1000),
 }
 
 
