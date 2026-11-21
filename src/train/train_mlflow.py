@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 from mlflow.models import infer_signature
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -48,13 +48,30 @@ def preprocessing() -> ColumnTransformer:
     )
 
 
-# TODO 1: choose at least three candidates and justify them in MODEL_SELECTION.md.
-# Change the settings, not just the names: a different model family or a clearly different setting each time.
+# TODO 1 (done): three candidates from three different model families, justified in MODEL_SELECTION.md.
+# Only about 25% of customers churn, so every candidate uses class_weight="balanced": without it the models
+# rarely predict "churn" at the 0.5 threshold and F1 drops (logreg: 0.495 without, 0.589 with).
 CANDIDATES = {
-    "logreg": LogisticRegression(max_iter=1000),
-    "random_forest": RandomForestClassifier(n_estimators=200, max_depth=8, random_state=42),
-    "gradient_boosting": GradientBoostingClassifier(random_state=42),
+    # a linear baseline: fast, tiny and easy to explain
+    "logreg_balanced": LogisticRegression(C=1.0, class_weight="balanced", max_iter=1000),
+    # many shallow trees: can learn interactions (e.g. short tenure AND many support calls)
+    "random_forest_balanced": RandomForestClassifier(
+        n_estimators=200, max_depth=6, min_samples_leaf=5, class_weight="balanced", random_state=42
+    ),
+    # boosted trees: each tree corrects the previous ones; small learning rate and shallow trees to avoid overfitting
+    "hist_gb_balanced": HistGradientBoostingClassifier(
+        max_iter=200, learning_rate=0.05, max_depth=3, class_weight="balanced", random_state=42
+    ),
 }
+
+
+# MLflow 3.17 saves scikit-learn models with skops, which refuses to save or load any type it does not trust.
+# Tree models store their nodes in these two types. We trust them because we trained the models ourselves;
+# never trust types in a model file that came from someone else.
+SKOPS_TRUSTED_TYPES = [
+    "sklearn.tree._tree.Tree",  # RandomForestClassifier
+    "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",  # HistGradientBoostingClassifier
+]
 
 
 def p95_latency_ms(model, X: pd.DataFrame, n: int = 200) -> float:
@@ -94,7 +111,8 @@ def main() -> None:
             mlflow.log_param("model", name)
             mlflow.log_params({f"clf__{k}": v for k, v in clf.get_params().items()})
             mlflow.log_param("data_file", DATA_FILE)
-            mlflow.log_param("data_sha256", data_sha)  # TODO 2 (explain in your video): why log a hash of the data?
+            # the fingerprint of the exact training data: same hash = same data, so runs are comparable and repeatable
+            mlflow.log_param("data_sha256", data_sha)
             mlflow.set_tags({"batch": BATCH, "git_sha": os.getenv("GIT_SHA", "local")})
 
             # metrics: how good it is
@@ -111,7 +129,10 @@ def main() -> None:
 
             # the model, with its signature (inputs and outputs) and an example row
             signature = infer_signature(X_te, proba)
-            info = mlflow.sklearn.log_model(model, name="model", signature=signature, input_example=X_te.head(3))
+            info = mlflow.sklearn.log_model(
+                model, name="model", signature=signature, input_example=X_te.head(3),
+                skops_trusted_types=SKOPS_TRUSTED_TYPES,
+            )
             mlflow.set_tag("model_uri", info.model_uri)
 
             print(f"{name:18s} run {run.info.run_id[:8]}  auc {metrics['auc']:.3f}  f1 {metrics['f1']:.3f}  "
